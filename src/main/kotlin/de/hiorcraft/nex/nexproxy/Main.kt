@@ -1,20 +1,20 @@
 package de.hiorcraft.nex.nexproxy;
 
 import com.google.inject.Inject
+import com.mojang.brigadier.arguments.StringArgumentType
+import com.mojang.brigadier.builder.LiteralArgumentBuilder
+import com.mojang.brigadier.builder.RequiredArgumentBuilder
+import com.velocitypowered.api.command.BrigadierCommand
+import com.velocitypowered.api.command.CommandSource
 import com.velocitypowered.api.event.Subscribe
-import com.velocitypowered.api.event.connection.PluginMessageEvent
+import com.velocitypowered.api.event.command.CommandExecuteEvent.CommandResult.command
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent
 import com.velocitypowered.api.plugin.Plugin
 import com.velocitypowered.api.proxy.ProxyServer
 import com.velocitypowered.api.proxy.messages.ChannelIdentifier
 import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier
 import net.kyori.adventure.text.Component
-import net.kyori.adventure.text.format.NamedTextColor
 import org.slf4j.Logger
-import java.io.ByteArrayInputStream
-import java.io.DataInput
-import java.io.DataInputStream
-
 
 @Plugin(
     id = "nexproxy",
@@ -35,22 +35,36 @@ class Main @Inject constructor(
 
         // Registrierung des Plugin-Messaging-Kanals
         server.channelRegistrar.register(teamChatChannel)
-    }
 
-    @Subscribe
-    fun onPluginMessage(event: PluginMessageEvent) {
-        if (event.identifier == teamChatChannel) {
-            val data = DataInputStream(ByteArrayInputStream(event.data))
-            val playerName = data.readUTF()
-            val message = data.readUTF()
+        // Brigadier-Command direkt in Main erstellen
+        val sendLiteral = LiteralArgumentBuilder.literal<CommandSource>("send")
+            .then(
+                RequiredArgumentBuilder.argument<CommandSource, String>("player", StringArgumentType.word())
+                    .then(
+                        RequiredArgumentBuilder.argument<CommandSource, String>("server", StringArgumentType.word())
+                            .executes { context ->
+                                val playerName = StringArgumentType.getString(context, "player")
+                                val serverName = StringArgumentType.getString(context, "server")
 
-            server.allPlayers
-                .filter { it.hasPermission("teamchat.use") }
-                .forEach { player ->
-                    player.sendMessage(
-                        Component.text("(TEAM) $playerName: $message", NamedTextColor.DARK_AQUA)
+                                val player = server.getPlayer(playerName)
+                                val targetServer = server.getServer(serverName)
+
+                                if (player.isEmpty || targetServer.isEmpty) {
+                                    context.source.sendMessage(Component.text("Spieler oder Server nicht gefunden."))
+                                    return@executes 0
+                                }
+
+                                player.get().createConnectionRequest(targetServer.get()).connect()
+                                context.source.sendMessage(Component.text("Sende $playerName zu $serverName..."))
+                                1
+                            }
                     )
-                }
-        }
+            )
+
+        val brigadierCommand = BrigadierCommand(sendLiteral)
+
+        // CommandMeta erstellen und registrieren (API: register(CommandMeta, Command))
+        val meta = server.commandManager.metaBuilder("send").build()
+        server.commandManager.register(meta, brigadierCommand)
     }
 }
